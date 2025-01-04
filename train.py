@@ -1,65 +1,105 @@
 import os
 import glob
 import time
+import argparse
 from datetime import datetime
 
 import torch
 import numpy as np
 
 import gym
-import roboschool
 
 from PPO import PPO
+from satellite import *
+from DynamicNet import *
 
 ################################### Training ###################################
 def train():
     print("============================================================================================")
+    # argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seq_num", type=int)
+    parser.add_argument("--env_name", default="Satellite", type=str)
+    parser.add_argument("--has_continuous_action_space", default=True, type=bool)
+    parser.add_argument("--max_ep_len", default=2000, type=int)
+    parser.add_argument("--max_training_timesteps", default=int(3e6), type=int)
+    parser.add_argument("--save_model_freq", default=int(1e5), type=int)
+    parser.add_argument("--print_freq_factor", default=10, type=int)
+    parser.add_argument("--log_freq_factor", default=2, type=int)
+    parser.add_argument("--action_std", default=0.6, type=float)
+    parser.add_argument("--action_std_decay_rate", default=0.05, type=float)
+    parser.add_argument("--min_action_std", default=0.1, type=float)
+    parser.add_argument("--action_std_decay_freq", default=int(2.5e5), type=int)
+    parser.add_argument("--update_timestep_factor", default=4, type=int)
+    parser.add_argument("--K_epochs", default=80, type=int)
+    parser.add_argument("--eps_clip", default=0.2, type=float)
+    parser.add_argument("--gamma", default=0.99, type=float)
+    parser.add_argument("--lr_actor", default=0.0003, type=float)
+    parser.add_argument("--lr_critic", default=0.001, type=float)
+    parser.add_argument("--random_seed", default=0, type=int)
+    parser.add_argument("--hidden_dim", default=256, type=int)
+    parser.add_argument("--dyn_hidden_size", default=[64, 128], type=list)
+    parser.add_argument("--dyn_net_path", default="", type=str)
+
+    args = parser.parse_args()
 
     ####### initialize environment hyperparameters ######
-    env_name = "RoboschoolWalker2d-v1"
+    env_name = args.env_name
 
-    has_continuous_action_space = True  # continuous action space; else discrete
+    has_continuous_action_space = args.has_continuous_action_space  # continuous action space; else discrete
 
-    max_ep_len = 1000                   # max timesteps in one episode
-    max_training_timesteps = int(3e6)   # break training loop if timeteps > max_training_timesteps
+    max_ep_len = args.max_ep_len                # max timesteps in one episode
+    max_training_timesteps = args.max_training_timesteps   # break training loop if timeteps > max_training_timesteps
 
-    print_freq = max_ep_len * 10        # print avg reward in the interval (in num timesteps)
-    log_freq = max_ep_len * 2           # log avg reward in the interval (in num timesteps)
-    save_model_freq = int(1e5)          # save model frequency (in num timesteps)
+    print_freq = max_ep_len * args.print_freq_factor        # print avg reward in the interval (in num timesteps)
+    log_freq = max_ep_len * args.log_freq_factor           # log avg reward in the interval (in num timesteps)
+    save_model_freq = args.save_model_freq          # save model frequency (in num timesteps)
 
-    action_std = 0.6                    # starting std for action distribution (Multivariate Normal)
-    action_std_decay_rate = 0.05        # linearly decay action_std (action_std = action_std - action_std_decay_rate)
-    min_action_std = 0.1                # minimum action_std (stop decay after action_std <= min_action_std)
-    action_std_decay_freq = int(2.5e5)  # action_std decay frequency (in num timesteps)
+    action_std = args.action_std                    # starting std for action distribution (Multivariate Normal)
+    action_std_decay_rate = args.action_std_decay_rate        # linearly decay action_std (action_std = action_std - action_std_decay_rate)
+    min_action_std = args.min_action_std                # minimum action_std (stop decay after action_std <= min_action_std)
+    action_std_decay_freq = args.action_std_decay_freq  # action_std decay frequency (in num timesteps)
     #####################################################
 
     ## Note : print/log frequencies should be > than max_ep_len
 
     ################ PPO hyperparameters ################
-    update_timestep = max_ep_len * 4      # update policy every n timesteps
-    K_epochs = 80               # update policy for K epochs in one PPO update
+    update_timestep = max_ep_len * args.update_timestep_factor      # update policy every n timesteps
+    K_epochs = args.K_epochs               # update policy for K epochs in one PPO update
 
-    eps_clip = 0.2          # clip parameter for PPO
-    gamma = 0.99            # discount factor
+    eps_clip = args.eps_clip          # clip parameter for PPO
+    gamma = args.gamma            # discount factor
 
-    lr_actor = 0.0003       # learning rate for actor network
-    lr_critic = 0.001       # learning rate for critic network
+    lr_actor = args.lr_actor       # learning rate for actor network
+    lr_critic = args.lr_critic       # learning rate for critic network
 
-    random_seed = 0         # set random seed if required (0 = no random seed)
+    random_seed = args.random_seed         # set random seed if required (0 = no random seed)
     #####################################################
 
     print("training environment name : " + env_name)
 
-    env = gym.make(env_name)
+    if env_name == "Satellite":
+        env = Satellite()
+    elif env_name == "FaultSatellite":
+        env = FaultSatellite()
+    elif env_name == "SunPointSatellite":
+        env = SunPointSatellite()
+    elif env_name == "SunPointFaultSatellite":
+        env = SunPointFaultSatellite()
+    else:
+        env = gym.make(env_name)
 
     # state space dimension
     state_dim = env.observation_space.shape[0]
+    state_dim += OUTPUT_NUM
 
     # action space dimension
     if has_continuous_action_space:
         action_dim = env.action_space.shape[0]
     else:
         action_dim = env.action_space.n
+
+    hidden_dim = args.hidden_dim
 
     ###################### logging ######################
 
@@ -73,9 +113,7 @@ def train():
           os.makedirs(log_dir)
 
     #### get number of log files in log directory
-    run_num = 0
-    current_num_files = next(os.walk(log_dir))[2]
-    run_num = len(current_num_files)
+    run_num = args.seq_num
 
     #### create new log file for each run
     log_f_name = log_dir + '/PPO_' + env_name + "_log_" + str(run_num) + ".csv"
@@ -85,18 +123,17 @@ def train():
     #####################################################
 
     ################### checkpointing ###################
-    run_num_pretrained = 0      #### change this to prevent overwriting weights in same env_name folder
+    run_num_pretrained = args.seq_num      #### change this to prevent overwriting weights in same env_name folder
 
     directory = "PPO_preTrained"
     if not os.path.exists(directory):
-          os.makedirs(directory)
+        os.makedirs(directory)
 
-    directory = directory + '/' + env_name + '/'
+    directory = directory + '/' + env_name
     if not os.path.exists(directory):
-          os.makedirs(directory)
+        os.makedirs(directory)
 
-
-    checkpoint_path = directory + "PPO_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
+    checkpoint_path = directory + "PPO_{}_{}.pth".format(env_name, run_num_pretrained)
     print("save checkpoint path : " + checkpoint_path)
     #####################################################
 
@@ -142,7 +179,12 @@ def train():
     ################# training procedure ################
 
     # initialize a PPO agent
-    ppo_agent = PPO(state_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip, has_continuous_action_space, action_std)
+    ppo_agent = PPO(state_dim, action_dim, hidden_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip, has_continuous_action_space, action_std)
+
+    dynamic_net = AttitudeDynamicsNN(args.dyn_hidden_size)
+    if args.dyn_net_path != "":
+        print(f"Load dynamic net: {args.dyn_net_path}")
+        dynamic_net.load_model(args.dyn_net_path)
 
     # track total training time
     start_time = datetime.now().replace(microsecond=0)
@@ -170,11 +212,22 @@ def train():
         state = env.reset()
         current_ep_reward = 0
 
-        for t in range(1, max_ep_len+1):
+        state = np.concatenate([state, np.zeros(OUTPUT_NUM)], axis=0)
+
+        # for t in range(1, max_ep_len+1):
+        while True:
 
             # select action with policy
             action = ppo_agent.select_action(state)
+            action = np.diag(action) @ env.u_max
+
+            # dynamic net
+            net_input = np.concatenate((env.omega.flatten(), (env.C@action).flatten()))
+            pred = dynamic_net(torch.tensor(net_input, dtype=torch.float32).unsqueeze(0)).cpu().detach().numpy()
+
             state, reward, done, _ = env.step(action)
+            pred_error = env.omega.flatten() - pred.flatten()
+            state = np.concatenate((state.flatten(), pred_error.flatten()))
 
             # saving reward and is_terminals
             ppo_agent.buffer.rewards.append(reward)

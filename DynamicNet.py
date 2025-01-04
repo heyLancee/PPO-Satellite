@@ -6,11 +6,10 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import argparse
 from satellite import *
-import TD3
 from typing import List
 
 INPUT_NUM = 6
-OUTPUT_NUM = TD3.STATE_APPEND_NUM
+OUTPUT_NUM = 3
 
 torch.set_printoptions(precision=8)
 
