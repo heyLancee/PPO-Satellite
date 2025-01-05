@@ -38,7 +38,7 @@ def train():
     parser.add_argument("--lr_critic", default=0.001, type=float)
     parser.add_argument("--random_seed", default=0, type=int)
     parser.add_argument("--hidden_dim", default=256, type=int)
-    parser.add_argument("--dyn_hidden_size", default=[64, 128], type=list)
+    parser.add_argument("--dyn_hidden_size", default=[64, 128], type=int, nargs='+')
     parser.add_argument("--dyn_net_path", default="", type=str)
 
     args = parser.parse_args()

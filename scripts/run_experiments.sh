@@ -16,7 +16,7 @@ pip install gym
 # 启动多个训练任务，分别保存到不同的文件夹
 for i in {1..5}; do
     # 启动训练任务，并将输出保存在不同的文件夹中
-    python main.py \
+    python train.py \
     --seq_num ${i} \
     --env "SunPointFaultSatellite" \
     --random_seed $i \
